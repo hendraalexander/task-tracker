@@ -1,0 +1,1 @@
+ALTER TABLE "User" ADD COLUMN "animations" BOOLEAN NOT NULL DEFAULT true;

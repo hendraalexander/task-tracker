@@ -1,0 +1,44 @@
+name: atracker-prod
+
+services:
+  migrate:
+    build:
+      context: .
+      target: migrator
+    profiles: ["tools"]
+    env_file:
+      - .env.production
+    restart: "no"
+
+  app:
+    build:
+      context: .
+      target: runner
+    image: atracker-app:production
+    env_file:
+      - .env.production
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data/uploads:/app/public/uploads
+    init: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"

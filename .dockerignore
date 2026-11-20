@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+public/uploads
+data
+dev.log
+*.log
+README.md
+deploy_staging.md
+deploy_prod.md
+scripts
