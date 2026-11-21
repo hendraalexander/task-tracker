@@ -1,0 +1,122 @@
+# =============================================================================
+# A Tracker — Docker Compose untuk deploy di Dokploy
+# =============================================================================
+# Cara pakai (Dokploy UI):
+#   1. Create Project -> Compose
+#   2. Provider  : Git (repo ini)
+#   3. Compose Path : ./docker-compose.dokploy.yml
+#   4. Environment : isi variabel wajib di bawah (tab Environment)
+#   5. Domains   : service "app", container port 3000, HTTPS
+#
+# Variabel WAJIB:
+#   POSTGRES_PASSWORD    password DB, gunakan alfanumerik (hindari karakter $ @ : / #)
+#   AUTH_SECRET          openssl rand -base64 32
+#   NEXT_PUBLIC_APP_URL  https://domain-kamu (dipakai untuk link di email)
+#
+# Variabel OPSIONAL:
+#   SESSION_TTL_DAYS (default 30), MAX_UPLOAD_MB (default 25)
+#   RESEND_API_KEY, EMAIL_FROM
+#
+# Catatan:
+#   - Jangan set container_name: bentrok saat redeploy/rollback.
+#   - Port 3000 tidak dipublish ke host. Traefik Dokploy mengakses container
+#     lewat network eksternal "dokploy-network".
+#   - Migrasi Prisma berjalan otomatis lewat service "migrate" sebelum app
+#     start (prisma migrate deploy bersifat idempotent).
+#   - Pakai managed Postgres dari Dokploy? Hapus service "db" + depends_on db,
+#     lalu set DATABASE_URL app & migrate ke connection string internal Dokploy.
+#   - JANGAN jalankan seed demo di production.
+# =============================================================================
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: atracker
+      POSTGRES_USER: atracker
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD wajib diisi di Environment Dokploy}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atracker -d atracker"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    shm_size: 256mb
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  migrate:
+    build:
+      context: .
+      target: migrator
+    restart: "no"
+    environment:
+      DATABASE_URL: "postgresql://atracker:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD wajib diisi di Environment Dokploy}@db:5432/atracker?schema=public"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  app:
+    build:
+      context: .
+      target: runner
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: "postgresql://atracker:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD wajib diisi di Environment Dokploy}@db:5432/atracker?schema=public"
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET wajib diisi (openssl rand -base64 32)}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:?NEXT_PUBLIC_APP_URL wajib diisi, contoh https://app.domain.com}
+      UPLOAD_DIR: public/uploads
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-25}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+    expose:
+      - "3000"
+    volumes:
+      - uploads:/app/public/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - default
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  db_data:
+  uploads:
+
+networks:
+  # Dibuat otomatis oleh Dokploy; Traefik memakai network ini untuk routing.
+  dokploy-network:
+    external: true
